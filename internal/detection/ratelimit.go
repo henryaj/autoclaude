@@ -20,6 +20,8 @@ type RateLimitStatus struct {
 //           "You've hit your limit · resets 10pm (Europe/London)"
 //           "Limit reached (resets 8m)" - minutes remaining format
 var rateLimitPatterns = []*regexp.Regexp{
+	// New format (extra usage): "You're out of extra usage · resets 8pm (Europe/London)"
+	regexp.MustCompile(`(?i)you're\s+out\s+of\s+extra\s+usage.*resets?\s+(\d{1,2}(?::\d{2})?\s*[ap]m)`),
 	// New format: "You've hit your limit · resets 10pm (Europe/London)"
 	regexp.MustCompile(`(?i)hit\s+your\s+limit.*resets?\s+(\d{1,2}(?::\d{2})?\s*[ap]m)`),
 	// Original format: "limit reached ∙ resets 2pm"
