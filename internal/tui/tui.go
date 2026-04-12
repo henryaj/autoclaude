@@ -12,6 +12,7 @@ import (
 )
 
 const pollInterval = 3 * time.Second
+const continueCooldown = 60 * time.Second // Minimum time between continue sends to same pane
 
 // Colors - bold, high-contrast palette
 var (
@@ -232,18 +233,23 @@ func (m *Model) pollPanes() {
 			if pane.IsRateLimited && pane.Mode == tmux.ModeContinueOnRateLimit {
 				now := time.Now()
 
-				if !pane.RateLimitTime.IsZero() {
-					// Known reset time: send continue when time has passed
-					if !pane.ContinueSent && now.After(pane.RateLimitTime) {
-						m.sendContinue(pane.ID)
-						pane.ContinueSent = true
-					}
-				} else {
-					// Unknown reset time: send continue every 15 minutes
-					periodicInterval := 15 * time.Minute
-					if pane.LastPeriodicContinue.IsZero() || now.Sub(pane.LastPeriodicContinue) >= periodicInterval {
-						m.sendContinue(pane.ID)
-						pane.LastPeriodicContinue = now
+				// Global per-pane cooldown: never send continue within 60s of the last one
+				cooldownActive := !pane.LastContinueSent.IsZero() && now.Sub(pane.LastContinueSent) < continueCooldown
+
+				if !cooldownActive {
+					if !pane.RateLimitTime.IsZero() {
+						// Known reset time: send continue when time has passed
+						if !pane.ContinueSent && now.After(pane.RateLimitTime) {
+							m.sendContinue(pane)
+							pane.ContinueSent = true
+						}
+					} else {
+						// Unknown reset time: send continue every 15 minutes
+						periodicInterval := 15 * time.Minute
+						if pane.LastPeriodicContinue.IsZero() || now.Sub(pane.LastPeriodicContinue) >= periodicInterval {
+							m.sendContinue(pane)
+							pane.LastPeriodicContinue = now
+						}
 					}
 				}
 			}
@@ -252,8 +258,9 @@ func (m *Model) pollPanes() {
 			if m.testPattern != "" &&
 				strings.Contains(content, m.testPattern) &&
 				pane.Mode == tmux.ModeContinueOnRateLimit &&
-				!pane.ContinueSent {
-				m.sendContinue(pane.ID)
+				!pane.ContinueSent &&
+				(pane.LastContinueSent.IsZero() || time.Since(pane.LastContinueSent) >= continueCooldown) {
+				m.sendContinue(pane)
 				pane.ContinueSent = true
 			}
 		} else {
@@ -261,22 +268,29 @@ func (m *Model) pollPanes() {
 			pane.RateLimitResets = ""
 			pane.RateLimitTime = time.Time{}
 			pane.ContinueSent = false
+			// NOTE: LastContinueSent is intentionally NOT reset here — it tracks
+			// cooldown across rate limit cycles to prevent spam when rate limit
+			// text briefly disappears and reappears.
 			pane.LastPeriodicContinue = time.Time{}
 		}
 	}
 }
 
 // sendContinue sends the continue command sequence to a pane
-func (m *Model) sendContinue(paneID string) {
+func (m *Model) sendContinue(pane *tmux.Pane) {
 	// Send: Escape (dismiss any menu), wait for UI to settle, then "continue", Enter
-	_ = tmux.SendKeys(paneID, "Escape")
+	_ = tmux.SendKeys(pane.ID, "Escape")
 	time.Sleep(100 * time.Millisecond) // Wait for Escape to be processed
-	_ = tmux.SendKeys(paneID, "continue")
-	_ = tmux.SendKeys(paneID, "Enter")
+	_ = tmux.SendKeys(pane.ID, "continue")
+	_ = tmux.SendKeys(pane.ID, "Enter")
+
+	// Track cooldown on the pane itself
+	now := time.Now()
+	pane.LastContinueSent = now
 
 	// Track for UI feedback
-	m.lastContinueSent = time.Now()
-	m.lastContinuePane = paneID
+	m.lastContinueSent = now
+	m.lastContinuePane = pane.ID
 }
 
 func (m *Model) updateLayout(layout *tmux.Layout) {
@@ -290,6 +304,7 @@ func (m *Model) updateLayout(layout *tmux.Layout) {
 				newPane.RateLimitResets = oldPane.RateLimitResets
 				newPane.RateLimitTime = oldPane.RateLimitTime
 				newPane.ContinueSent = oldPane.ContinueSent
+				newPane.LastContinueSent = oldPane.LastContinueSent
 				newPane.LastPeriodicContinue = oldPane.LastPeriodicContinue
 			}
 		}

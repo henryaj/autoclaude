@@ -41,6 +41,7 @@ type Pane struct {
 	RateLimitResets       string    // Display string like "10pm" or empty if unknown
 	RateLimitTime         time.Time // Parsed reset time (zero if unknown)
 	ContinueSent          bool      // Whether we've sent continue for this rate limit
+	LastContinueSent      time.Time // When we last sent ANY continue to this pane (cooldown tracking)
 	LastPeriodicContinue  time.Time // For unknown reset times: when we last sent periodic continue
 }
 
