@@ -87,6 +87,11 @@ func TestCheckRateLimit_TimeFormats(t *testing.T) {
 			wantTime: "11pm",
 		},
 		{
+			name:     "session limit with minutes",
+			content:  "You've hit your session limit · resets 1:20pm (Europe/Amsterdam)\n/upgrade to increase your usage limit.",
+			wantTime: "1:20pm",
+		},
+		{
 			name:     "minutes remaining format",
 			content:  "⚠ Limit reached (resets 8m)",
 			wantTime: "8m",
@@ -147,6 +152,10 @@ func TestCheckRateLimit_FallbackNoTime(t *testing.T) {
 		{
 			name:    "hit your limit with curly apostrophe",
 			content: "You've hit your limit",
+		},
+		{
+			name:    "hit your session limit",
+			content: "You've hit your session limit",
 		},
 		{
 			name:    "limit reached without time",
