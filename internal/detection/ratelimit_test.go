@@ -87,6 +87,21 @@ func TestCheckRateLimit_TimeFormats(t *testing.T) {
 			wantTime: "11pm",
 		},
 		{
+			name:     "session limit with clock time",
+			content:  "You've hit your session limit · resets 2:20pm (Europe/Dublin)",
+			wantTime: "2:20pm",
+		},
+		{
+			name:     "weekly limit",
+			content:  "You've hit your weekly limit · resets 9am",
+			wantTime: "9am",
+		},
+		{
+			name:     "session limit minutes format",
+			content:  "You've hit your session limit · resets 45m",
+			wantTime: "45m",
+		},
+		{
 			name:     "minutes remaining format",
 			content:  "⚠ Limit reached (resets 8m)",
 			wantTime: "8m",

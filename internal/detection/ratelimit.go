@@ -18,14 +18,19 @@ type RateLimitStatus struct {
 // Rate limit patterns - multiple formats Claude Code uses
 // Examples: "limit reached ∙ resets 2pm", "limit reached ∙ resets 10:30am"
 //           "You've hit your limit · resets 10pm (Europe/London)"
+//           "You've hit your session limit · resets 2:20pm (Europe/Dublin)"
+//           "You've hit your weekly limit · resets 9am"
 //           "Limit reached (resets 8m)" - minutes remaining format
+//
+// The `(?:\w+\s+)?` allows an optional qualifier word that Claude Code now
+// inserts between "your" and "limit" (e.g. "session", "weekly").
 var rateLimitPatterns = []*regexp.Regexp{
-	// New format: "You've hit your limit · resets 10pm (Europe/London)"
-	regexp.MustCompile(`(?i)hit\s+your\s+limit.*resets?\s+(\d{1,2}(?::\d{2})?\s*[ap]m)`),
+	// New format: "You've hit your [session] limit · resets 10pm (Europe/London)"
+	regexp.MustCompile(`(?i)hit\s+your\s+(?:\w+\s+)?limit.*resets?\s+(\d{1,2}(?::\d{2})?\s*[ap]m)`),
 	// Original format: "limit reached ∙ resets 2pm"
 	regexp.MustCompile(`(?i)limit\s+reached.*resets?\s+(\d{1,2}(?::\d{2})?\s*[ap]m)`),
 	// Minutes remaining format: "Limit reached (resets 8m)" or "resets 45m"
-	regexp.MustCompile(`(?i)(?:hit\s+your\s+limit|limit\s+reached).*resets?\s+(\d{1,3})m\b`),
+	regexp.MustCompile(`(?i)(?:hit\s+your\s+(?:\w+\s+)?limit|limit\s+reached).*resets?\s+(\d{1,3})m\b`),
 }
 
 // Fallback patterns - detect rate limit without capturing time
@@ -33,7 +38,8 @@ var rateLimitPatterns = []*regexp.Regexp{
 // These patterns are more specific to avoid false positives
 var rateLimitFallbackPatterns = []*regexp.Regexp{
 	// "You've hit your limit" - Claude Code's primary message
-	regexp.MustCompile(`(?i)you['']ve\s+hit\s+your\s+limit`),
+	// (?:\w+\s+)? also matches "your session limit" / "your weekly limit"
+	regexp.MustCompile(`(?i)you['']ve\s+hit\s+your\s+(?:\w+\s+)?limit`),
 	// "Limit reached" at word boundary (not "rate limit exceeded" or similar)
 	regexp.MustCompile(`(?i)\blimit\s+reached\b`),
 	// "rate limited" as a status indicator
