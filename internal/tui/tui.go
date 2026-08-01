@@ -12,6 +12,8 @@ import (
 )
 
 const pollInterval = 3 * time.Second
+const rateLimitScrollbackLines = 80
+const unknownResetContinueInterval = 30 * time.Minute
 
 // Colors - bold, high-contrast palette
 var (
@@ -76,6 +78,8 @@ type Model struct {
 	testPattern      string    // Test mode: trigger on this string instead of rate limit
 	lastContinueSent time.Time // When we last sent a continue command
 	lastContinuePane string    // Which pane we sent it to
+	lastMenuConfirmSent time.Time // When we auto-confirmed the rate-limit menu
+	lastMenuConfirmPane string    // Which pane we confirmed
 	showHelp         bool      // Whether to show the help overlay
 }
 
@@ -210,38 +214,67 @@ func (m *Model) pollPanes() {
 			continue
 		}
 
+		rateLimitContent, err := tmux.CapturePaneRecent(pane.ID, rateLimitScrollbackLines)
+		if err != nil {
+			rateLimitContent = content
+		}
+
 		pane.HasClaudeCode = detection.IsClaudeCode(content)
 
 		// Check rate limit status for Claude Code panes
 		if pane.HasClaudeCode {
-			status := detection.CheckRateLimit(content)
+			status := detection.CheckRateLimit(rateLimitContent)
 
 			// Track rate limit state
 			wasLimited := pane.IsRateLimited
 			pane.IsRateLimited = status.IsLimited
 			pane.RateLimitResets = status.ResetsAt
 			pane.RateLimitTime = status.ResetTime
+			pane.RateLimitMenuOpen = status.OptionsMenuOpen
 
-			// Reset ContinueSent and LastPeriodicContinue when a new rate limit appears
+			if !status.IsLimited {
+				pane.RateLimitMenuConfirmed = false
+			}
+
+			// Reset continue/menu state when a new rate limit appears
 			if !wasLimited && status.IsLimited {
 				pane.ContinueSent = false
 				pane.LastPeriodicContinue = time.Time{}
+				pane.RateLimitMenuConfirmed = false
 			}
 
-			// Auto-continue logic for rate-limited panes in auto mode
-			if pane.IsRateLimited && pane.Mode == tmux.ModeContinueOnRateLimit {
+			// Auto-confirm "Stop and wait" on the /rate-limit-options menu
+			if pane.Mode == tmux.ModeContinueOnRateLimit &&
+				status.OptionsMenuOpen &&
+				!pane.RateLimitMenuConfirmed {
+				if status.WaitOptionSelected || status.HighlightedOption == 1 {
+					m.confirmRateLimitWaitMenu(pane.ID)
+					pane.RateLimitMenuConfirmed = true
+				} else if status.HighlightedOption > 1 {
+					_ = tmux.SendKeys(pane.ID, "Up")
+				} else {
+					// Highlight not parsed — move up once per poll toward option 1
+					_ = tmux.SendKeys(pane.ID, "Up")
+				}
+			}
+
+			// Auto-continue after limit clears (only after menu handled or not shown)
+			readyForContinue := pane.IsRateLimited &&
+				(!status.OptionsMenuOpen || pane.RateLimitMenuConfirmed)
+
+			if readyForContinue && pane.Mode == tmux.ModeContinueOnRateLimit {
 				now := time.Now()
 
 				if !pane.RateLimitTime.IsZero() {
-					// Known reset time: send continue when time has passed
-					if !pane.ContinueSent && now.After(pane.RateLimitTime) {
+					// Known reset time: send continue when time has passed (+ small margin)
+					resetDeadline := pane.RateLimitTime.Add(90 * time.Second)
+					if !pane.ContinueSent && now.After(resetDeadline) {
 						m.sendContinue(pane.ID)
 						pane.ContinueSent = true
 					}
-				} else {
-					// Unknown reset time: send continue every 15 minutes
-					periodicInterval := 15 * time.Minute
-					if pane.LastPeriodicContinue.IsZero() || now.Sub(pane.LastPeriodicContinue) >= periodicInterval {
+				} else if pane.RateLimitMenuConfirmed || !status.OptionsMenuOpen {
+					// Unknown reset time: periodic continue only after wait mode is engaged
+					if pane.LastPeriodicContinue.IsZero() || now.Sub(pane.LastPeriodicContinue) >= unknownResetContinueInterval {
 						m.sendContinue(pane.ID)
 						pane.LastPeriodicContinue = now
 					}
@@ -262,8 +295,18 @@ func (m *Model) pollPanes() {
 			pane.RateLimitTime = time.Time{}
 			pane.ContinueSent = false
 			pane.LastPeriodicContinue = time.Time{}
+			pane.RateLimitMenuOpen = false
+			pane.RateLimitMenuConfirmed = false
 		}
 	}
+}
+
+// confirmRateLimitWaitMenu confirms the highlighted "Stop and wait" option.
+func (m *Model) confirmRateLimitWaitMenu(paneID string) {
+	_ = tmux.SendKeys(paneID, "Enter")
+
+	m.lastMenuConfirmSent = time.Now()
+	m.lastMenuConfirmPane = paneID
 }
 
 // sendContinue sends the continue command sequence to a pane
@@ -291,6 +334,8 @@ func (m *Model) updateLayout(layout *tmux.Layout) {
 				newPane.RateLimitTime = oldPane.RateLimitTime
 				newPane.ContinueSent = oldPane.ContinueSent
 				newPane.LastPeriodicContinue = oldPane.LastPeriodicContinue
+				newPane.RateLimitMenuOpen = oldPane.RateLimitMenuOpen
+				newPane.RateLimitMenuConfirmed = oldPane.RateLimitMenuConfirmed
 			}
 		}
 	}
@@ -363,7 +408,9 @@ func (m *Model) checkPaneRateLimit(pane *tmux.Pane) {
 	pane.IsRateLimited = status.IsLimited
 	pane.RateLimitResets = status.ResetsAt
 	pane.RateLimitTime = status.ResetTime
+	pane.RateLimitMenuOpen = status.OptionsMenuOpen
 	pane.ContinueSent = false
+	pane.RateLimitMenuConfirmed = false
 }
 
 func (m *Model) enableAll() {
@@ -443,8 +490,10 @@ func (m Model) View() string {
 	// Footer with selected pane status (left) and help (right)
 	var statusText string
 
-	// Show "continue sent" message for 20 seconds after sending
-	if !m.lastContinueSent.IsZero() && time.Since(m.lastContinueSent) < 20*time.Second {
+	// Show "continue sent" or "wait confirmed" for 20 seconds after action
+	if !m.lastMenuConfirmSent.IsZero() && time.Since(m.lastMenuConfirmSent) < 20*time.Second {
+		statusText = lipgloss.NewStyle().Foreground(lipgloss.Color("#f1fa8c")).Bold(true).Render("↳ wait option confirmed!")
+	} else if !m.lastContinueSent.IsZero() && time.Since(m.lastContinueSent) < 20*time.Second {
 		statusText = lipgloss.NewStyle().Foreground(lipgloss.Color("#f1fa8c")).Bold(true).Render("↳ continue sent!")
 	} else if m.layout != nil {
 		if pane := m.layout.PaneByID(m.selectedPaneID); pane != nil {
@@ -515,9 +564,9 @@ sends "continue" when rate limits reset.
 
 ` + lipgloss.NewStyle().Bold(true).Foreground(accentCyan).Render("HOW IT WORKS") + `
 
-  When a Claude Code pane shows a rate limit message like
-  "limit reached ∙ resets Xpm" or "You've hit your limit",
-  autoclaude waits for that time to pass, then sends:
+  When a Claude Code pane hits a rate limit, autoclaude auto-confirms
+  "Stop and wait for limit to reset" on the /rate-limit-options menu,
+  waits for the reset time (or polls periodically if unknown), then sends:
   Escape → "continue" → Enter
 
   Polling occurs every 3 seconds.

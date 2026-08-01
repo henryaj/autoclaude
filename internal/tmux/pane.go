@@ -42,6 +42,8 @@ type Pane struct {
 	RateLimitTime         time.Time // Parsed reset time (zero if unknown)
 	ContinueSent          bool      // Whether we've sent continue for this rate limit
 	LastPeriodicContinue  time.Time // For unknown reset times: when we last sent periodic continue
+	RateLimitMenuOpen     bool      // /rate-limit-options menu is on screen
+	RateLimitMenuConfirmed bool     // Auto-confirmed "Stop and wait for limit to reset"
 }
 
 // Center returns the center point of the pane
