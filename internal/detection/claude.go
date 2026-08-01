@@ -24,7 +24,7 @@ var (
 
 	// Rate limit messages - definitive proof it's Claude Code
 	rateLimitMsgPattern    = regexp.MustCompile(`(?i)limit\s+reached`)
-	rateLimitMsgPatternAlt = regexp.MustCompile(`(?i)hit\s+your\s+limit`)
+	rateLimitMsgPatternAlt = regexp.MustCompile(`(?i)hit\s+your\s+(?:(?:session|weekly)\s+)?limit`)
 
 	// Dashed separator line used in Claude Code UI
 	dashedSeparator = regexp.MustCompile(`╌{10,}`)

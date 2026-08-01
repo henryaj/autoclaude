@@ -149,12 +149,29 @@ func parsePaneLine(line string) (*Pane, error) {
 	}, nil
 }
 
-// CapturePane captures the content of a pane
+// CapturePane captures the visible content of a pane
 func CapturePane(paneID string) (string, error) {
+	return capturePane(paneID, 0)
+}
+
+// CapturePaneRecent captures the last n lines of scrollback plus the visible screen.
+// Useful when rate-limit messages scroll off the visible area but the options menu remains.
+func CapturePaneRecent(paneID string, lines int) (string, error) {
+	if lines <= 0 {
+		return CapturePane(paneID)
+	}
+	return capturePane(paneID, -lines)
+}
+
+func capturePane(paneID string, startLine int) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "tmux", "capture-pane", "-t", paneID, "-p")
+	args := []string{"capture-pane", "-t", paneID, "-p"}
+	if startLine != 0 {
+		args = append(args, "-S", strconv.Itoa(startLine))
+	}
+	cmd := exec.CommandContext(ctx, "tmux", args...)
 	output, err := cmd.Output()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {

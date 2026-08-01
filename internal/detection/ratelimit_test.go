@@ -55,6 +55,45 @@ func TestCheckRateLimit_NoMatch(t *testing.T) {
 	}
 }
 
+func TestCheckRateLimit_MenuOnly(t *testing.T) {
+	content := loadFixture(t, "rate_limit_menu_only.txt")
+	status := CheckRateLimit(content)
+
+	if !status.IsLimited {
+		t.Error("expected IsLimited to be true")
+	}
+	if !status.OptionsMenuOpen {
+		t.Error("expected OptionsMenuOpen to be true")
+	}
+	if status.HighlightedOption != 1 {
+		t.Errorf("expected HighlightedOption 1, got %d", status.HighlightedOption)
+	}
+	if !status.WaitOptionSelected {
+		t.Error("expected WaitOptionSelected to be true")
+	}
+	if status.ResetsAt != "" {
+		t.Errorf("expected empty ResetsAt, got %q", status.ResetsAt)
+	}
+}
+
+func TestCheckRateLimit_MenuUpgradeHighlighted(t *testing.T) {
+	content := loadFixture(t, "rate_limit_menu_upgrade_selected.txt")
+	status := CheckRateLimit(content)
+
+	if !status.IsLimited {
+		t.Error("expected IsLimited to be true")
+	}
+	if !status.OptionsMenuOpen {
+		t.Error("expected OptionsMenuOpen to be true")
+	}
+	if status.HighlightedOption != 2 {
+		t.Errorf("expected HighlightedOption 2, got %d", status.HighlightedOption)
+	}
+	if status.WaitOptionSelected {
+		t.Error("expected WaitOptionSelected to be false")
+	}
+}
+
 func TestCheckRateLimit_TimeFormats(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -62,9 +101,19 @@ func TestCheckRateLimit_TimeFormats(t *testing.T) {
 		wantTime string
 	}{
 		{
-			name:     "simple pm",
-			content:  "You've hit your limit · resets 2pm",
-			wantTime: "2pm",
+			name:     "session limit with time",
+			content:  "You've hit your session limit · resets 1:20pm (Asia/Jerusalem)",
+			wantTime: "1:20pm",
+		},
+		{
+			name:     "weekly limit with time",
+			content:  "You've hit your weekly limit · resets 11pm (Europe/London)",
+			wantTime: "11pm",
+		},
+		{
+			name:     "session limit mojibake separator",
+			content:  "You've hit your session limit Â· resets 1:20pm (Asia/Jerusalem)",
+			wantTime: "1:20pm",
 		},
 		{
 			name:     "simple am",
