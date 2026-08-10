@@ -69,8 +69,8 @@ type Model struct {
 	height           int
 	layout           *tmux.Layout
 	selectedPaneID   string
-	ownPaneID        string    // The pane running autoclaude (excluded from detection)
-	ownWindowID      string    // The window to monitor (pinned at startup)
+	ownPaneID        string // The pane running autoclaude (excluded from detection)
+	ownWindowID      string // The window to monitor (pinned at startup)
 	err              error
 	errTime          time.Time // When the error occurred (for auto-clear)
 	testPattern      string    // Test mode: trigger on this string instead of rate limit
@@ -214,19 +214,7 @@ func (m *Model) pollPanes() {
 
 		// Check rate limit status for Claude Code panes
 		if pane.HasClaudeCode {
-			status := detection.CheckRateLimit(content)
-
-			// Track rate limit state
-			wasLimited := pane.IsRateLimited
-			pane.IsRateLimited = status.IsLimited
-			pane.RateLimitResets = status.ResetsAt
-			pane.RateLimitTime = status.ResetTime
-
-			// Reset ContinueSent and LastPeriodicContinue when a new rate limit appears
-			if !wasLimited && status.IsLimited {
-				pane.ContinueSent = false
-				pane.LastPeriodicContinue = time.Time{}
-			}
+			applyRateLimit(pane, detection.CheckRateLimit(content))
 
 			// Auto-continue logic for rate-limited panes in auto mode
 			if pane.IsRateLimited && pane.Mode == tmux.ModeContinueOnRateLimit {
@@ -257,12 +245,29 @@ func (m *Model) pollPanes() {
 				pane.ContinueSent = true
 			}
 		} else {
-			pane.IsRateLimited = false
-			pane.RateLimitResets = ""
-			pane.RateLimitTime = time.Time{}
-			pane.ContinueSent = false
-			pane.LastPeriodicContinue = time.Time{}
+			pane.ClearRateLimit()
 		}
+	}
+}
+
+// applyRateLimit folds a fresh reading into a pane's rate limit state.
+//
+// The deadline is pinned when a limit first appears and re-pinned only when
+// the message itself changes. A relative reset like "8m" counts from the
+// moment it was read, so recomputing it on every poll would push the deadline
+// another three seconds out forever and no continue would ever be sent. The
+// same check re-arms us for a second limit later in the session, which would
+// otherwise look like the first one still sitting in the scrollback.
+func applyRateLimit(pane *tmux.Pane, status detection.RateLimitStatus) {
+	switch {
+	case !status.IsLimited:
+		pane.ClearRateLimit()
+	case !pane.IsRateLimited || status.ResetsAt != pane.RateLimitResets:
+		pane.IsRateLimited = true
+		pane.RateLimitResets = status.ResetsAt
+		pane.RateLimitTime = status.ResetTime
+		pane.ContinueSent = false
+		pane.LastPeriodicContinue = time.Time{}
 	}
 }
 
@@ -359,11 +364,15 @@ func (m *Model) checkPaneRateLimit(pane *tmux.Pane) {
 		return
 	}
 
-	status := detection.CheckRateLimit(content)
-	pane.IsRateLimited = status.IsLimited
-	pane.RateLimitResets = status.ResetsAt
-	pane.RateLimitTime = status.ResetTime
-	pane.ContinueSent = false
+	applyRateLimit(pane, detection.CheckRateLimit(content))
+	// Re-arm: the user just asked us to watch this pane, so send a continue
+	// even if we already sent one for this limit. Both counters have to go:
+	// the known-reset-time path gates on ContinueSent, the periodic path for
+	// unknown reset times gates on LastPeriodicContinue.
+	if pane.IsRateLimited {
+		pane.ContinueSent = false
+		pane.LastPeriodicContinue = time.Time{}
+	}
 }
 
 func (m *Model) enableAll() {
@@ -430,7 +439,7 @@ func (m Model) View() string {
 		content = dimTextStyle.Render("No panes found")
 	} else {
 		// Render the ASCII layout
-		layoutWidth := mainWidth - 4  // Account for padding
+		layoutWidth := mainWidth - 4 // Account for padding
 		layoutHeight := mainHeight - 2
 		content = renderLayout(m.layout, m.selectedPaneID, layoutWidth, layoutHeight)
 	}

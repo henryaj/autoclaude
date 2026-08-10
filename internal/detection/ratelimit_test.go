@@ -3,6 +3,7 @@ package detection
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -146,7 +147,7 @@ func TestCheckRateLimit_FallbackNoTime(t *testing.T) {
 		},
 		{
 			name:    "hit your limit with curly apostrophe",
-			content: "You've hit your limit",
+			content: "You\u2019ve hit your limit",
 		},
 		{
 			name:    "limit reached without time",
@@ -238,5 +239,162 @@ func TestHasReset(t *testing.T) {
 				t.Errorf("HasReset() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCheckRateLimit_SessionLimit(t *testing.T) {
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Fatalf("failed to load Europe/Berlin: %v", err)
+	}
+
+	// Both captures are the same screen; the dialog is only present until the
+	// user dismisses it
+	for _, name := range []string{"session_limit.txt", "session_limit_dialog.txt"} {
+		t.Run(name, func(t *testing.T) {
+			status := CheckRateLimit(loadFixture(t, name))
+
+			if !status.IsLimited {
+				t.Fatal("expected IsLimited to be true")
+			}
+			if status.ResetsAt != "6:50pm" {
+				t.Errorf("expected ResetsAt to be '6:50pm', got '%s'", status.ResetsAt)
+			}
+			if got := status.ResetTime.In(berlin); got.Hour() != 18 || got.Minute() != 50 {
+				t.Errorf("expected reset at 18:50 Europe/Berlin, got %s", got)
+			}
+		})
+	}
+}
+
+func TestCheckRateLimit_ResetTimezone(t *testing.T) {
+	london, err := time.LoadLocation("Europe/London")
+	if err != nil {
+		t.Fatalf("failed to load Europe/London: %v", err)
+	}
+
+	// The zone Claude Code prints is the account's, which need not match this
+	// host's - "11pm (Europe/London)" is 11pm in London wherever we're running
+	status := CheckRateLimit("You've hit your limit \u00b7 resets 11pm (Europe/London)")
+
+	if !status.IsLimited {
+		t.Fatal("expected IsLimited to be true")
+	}
+	if got := status.ResetTime.In(london); got.Hour() != 23 || got.Minute() != 0 {
+		t.Errorf("expected reset at 23:00 Europe/London, got %s", got)
+	}
+}
+
+func TestCheckRateLimit_UnknownTimezoneFallsBackToLocal(t *testing.T) {
+	status := CheckRateLimit("You've hit your limit \u00b7 resets 11pm (Middle/Earth)")
+
+	if !status.IsLimited {
+		t.Fatal("expected IsLimited to be true")
+	}
+	if got := status.ResetTime.In(time.Now().Location()); got.Hour() != 23 {
+		t.Errorf("expected reset at 23:00 local time, got %s", got)
+	}
+}
+
+func TestCheckRateLimit_HoursFormat(t *testing.T) {
+	cases := []struct {
+		name         string
+		content      string
+		wantResetsAt string
+		wantUntil    time.Duration
+	}{
+		{
+			name:         "hours and minutes",
+			content:      "\u26a0 Limit reached (resets 1h 13m)",
+			wantResetsAt: "1h 13m",
+			wantUntil:    73 * time.Minute,
+		},
+		{
+			name:         "whole hours",
+			content:      "\u26a0 Limit reached (resets 2h)",
+			wantResetsAt: "2h",
+			wantUntil:    2 * time.Hour,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status := CheckRateLimit(tc.content)
+
+			if !status.IsLimited {
+				t.Fatal("expected IsLimited to be true")
+			}
+			if status.ResetsAt != tc.wantResetsAt {
+				t.Errorf("expected ResetsAt to be '%s', got '%s'", tc.wantResetsAt, status.ResetsAt)
+			}
+			if status.TimeUntil < tc.wantUntil-time.Second || status.TimeUntil > tc.wantUntil+time.Second {
+				t.Errorf("expected TimeUntil to be ~%v, got %v", tc.wantUntil, status.TimeUntil)
+			}
+		})
+	}
+}
+
+func TestCheckRateLimit_TypographyAndWrapping(t *testing.T) {
+	cases := []struct {
+		name     string
+		content  string
+		wantTime string
+	}{
+		{
+			name:     "session qualifier",
+			content:  "You've hit your session limit \u00b7 resets 6:50pm (Europe/Berlin)",
+			wantTime: "6:50pm",
+		},
+		{
+			name:     "weekly qualifier",
+			content:  "You've hit your weekly limit \u00b7 resets 9am",
+			wantTime: "9am",
+		},
+		{
+			name:     "non-breaking spaces",
+			content:  "\u00a0You've hit your\u00a0session limit \u00b7 resets\u00a02pm",
+			wantTime: "2pm",
+		},
+		{
+			name:     "curly apostrophe",
+			content:  "You\u2019ve hit your session limit \u00b7 resets 2pm",
+			wantTime: "2pm",
+		},
+		{
+			name:     "message wrapped across lines in a narrow pane",
+			content:  "  \u23bf  You've hit your session\n     limit \u00b7 resets 6:50pm\n     (Europe/Berlin)",
+			wantTime: "6:50pm",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status := CheckRateLimit(tc.content)
+
+			if !status.IsLimited {
+				t.Fatal("expected IsLimited to be true")
+			}
+			if status.ResetsAt != tc.wantTime {
+				t.Errorf("expected ResetsAt to be '%s', got '%s'", tc.wantTime, status.ResetsAt)
+			}
+			if status.ResetTime.IsZero() {
+				t.Error("expected ResetTime to be set")
+			}
+		})
+	}
+}
+
+func TestCheckRateLimit_UnrelatedResetsNearby(t *testing.T) {
+	// The limit message and a "resets" line far apart on screen must not be
+	// stitched together into a reset time
+	content := "Limit reached\n" + strings.Repeat("filler output\n", 10) + "the cache resets 4pm"
+
+	status := CheckRateLimit(content)
+
+	if !status.IsLimited {
+		t.Fatal("expected IsLimited to be true")
+	}
+	if status.ResetsAt != "" {
+		t.Errorf("expected ResetsAt to be empty, got '%s'", status.ResetsAt)
 	}
 }

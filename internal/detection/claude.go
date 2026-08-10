@@ -7,8 +7,9 @@ import (
 
 // Claude Code UI patterns - multiple approaches for robustness
 var (
-	// Box-drawing characters used in Claude Code's UI
-	boxDrawingPattern = regexp.MustCompile(`[─│┌┐└┘├┤┬┴┼╭╮╯╰]`)
+	// Frame characters Claude Code draws its UI with: box-drawing for the
+	// input border, an upper eighth block for the rule above dialogs
+	uiFramePattern = regexp.MustCompile(`[─│┌┐└┘├┤┬┴┼╭╮╯╰▔]`)
 
 	// The input prompt pattern: > at start of line (with possible ANSI codes)
 	promptPattern = regexp.MustCompile(`(?m)^(\x1b\[[0-9;]*m)*>\s`)
@@ -22,9 +23,8 @@ var (
 	// Menu selector used in question/choice UI
 	menuSelectorPattern = regexp.MustCompile(`❯`)
 
-	// Rate limit messages - definitive proof it's Claude Code
-	rateLimitMsgPattern    = regexp.MustCompile(`(?i)limit\s+reached`)
-	rateLimitMsgPatternAlt = regexp.MustCompile(`(?i)hit\s+your\s+limit`)
+	// Rate limit message - definitive proof it's Claude Code
+	rateLimitMsgPattern = regexp.MustCompile(`(?i)` + limitPhrase)
 
 	// Dashed separator line used in Claude Code UI
 	dashedSeparator = regexp.MustCompile(`╌{10,}`)
@@ -32,8 +32,10 @@ var (
 
 // IsClaudeCode detects if pane content appears to be running Claude Code
 func IsClaudeCode(content string) bool {
+	content = normalizeText(content)
+
 	// Rate limit message is definitive - if we see it, it's Claude Code
-	if rateLimitMsgPattern.MatchString(content) || rateLimitMsgPatternAlt.MatchString(content) {
+	if rateLimitMsgPattern.MatchString(content) {
 		return true
 	}
 
@@ -42,8 +44,8 @@ func IsClaudeCode(content string) bool {
 		return true
 	}
 
-	// Must have box-drawing characters for other detection methods
-	if !boxDrawingPattern.MatchString(content) {
+	// Must have frame characters for other detection methods
+	if !uiFramePattern.MatchString(content) {
 		return false
 	}
 
@@ -62,6 +64,21 @@ func IsClaudeCode(content string) bool {
 	}
 
 	return false
+}
+
+// textNormalizer folds the typography Claude Code renders with back to ASCII.
+// It pads output with non-breaking spaces and curls apostrophes, neither of
+// which Go's ASCII-only \s and literal ' can match.
+var textNormalizer = strings.NewReplacer(
+	"\u00a0", " ", // no-break space
+	"\u202f", " ", // narrow no-break space
+	"\u2009", " ", // thin space
+	"\u2019", "'", // right single quotation mark
+)
+
+// normalizeText prepares pane content for pattern matching
+func normalizeText(s string) string {
+	return textNormalizer.Replace(s)
 }
 
 // StripANSI removes ANSI escape codes from a string

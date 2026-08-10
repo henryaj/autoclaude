@@ -1,6 +1,7 @@
 package detection
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -15,6 +16,18 @@ func TestIsClaudeCode_RateLimitOld(t *testing.T) {
 	content := loadFixture(t, "rate_limit_old_format.txt")
 	if !IsClaudeCode(content) {
 		t.Error("expected IsClaudeCode to return true for old rate limit format")
+	}
+}
+
+func TestIsClaudeCode_SessionLimit(t *testing.T) {
+	// The limit screen draws its rule with block elements rather than
+	// box-drawing characters, so it has to be recognised by the message alone
+	for _, name := range []string{"session_limit.txt", "session_limit_dialog.txt"} {
+		t.Run(name, func(t *testing.T) {
+			if !IsClaudeCode(loadFixture(t, name)) {
+				t.Error("expected IsClaudeCode to return true for session limit screen")
+			}
+		})
 	}
 }
 
@@ -50,6 +63,21 @@ func TestIsClaudeCode_Patterns(t *testing.T) {
 		{
 			name:    "hit your limit message",
 			content: "You've hit your limit · resets 10pm",
+			want:    true,
+		},
+		{
+			name:    "hit your session limit message",
+			content: "You've hit your session limit \u00b7 resets 6:50pm (Europe/Berlin)",
+			want:    true,
+		},
+		{
+			name:    "hit your weekly limit message",
+			content: "You've hit your weekly limit",
+			want:    true,
+		},
+		{
+			name:    "block element rule above a dialog",
+			content: strings.Repeat("\u2594", 20) + "\n\u276f 1. Stop and wait",
 			want:    true,
 		},
 		{

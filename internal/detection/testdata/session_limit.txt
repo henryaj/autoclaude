@@ -1,0 +1,20 @@
+
+ ▐▛███▜▌   Claude Code v2.1.226
+▝▜█████▛▘  Opus 5 (1M context) with xhigh effort · Claude Max
+  ▘▘ ▝▝    ~/workspace/demo
+
+ ⚠ 4 MCP servers need authentication · run /mcp
+
+❯ hello
+  ⎿  You've hit your session limit · resets 6:50pm (Europe/Berlin)
+
+✻ Crunched for 0s
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  opus ◕ xhigh ░░░░░░░░░░ 5% | demo:master | ░░░░░░░░░░ 0% (5h)
+  ⏵⏵ auto mode on (shift+tab to cycle)
